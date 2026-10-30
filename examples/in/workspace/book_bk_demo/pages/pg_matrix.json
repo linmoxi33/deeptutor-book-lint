@@ -1,0 +1,27 @@
+{
+  "id": "pg_matrix",
+  "book_id": "bk_demo",
+  "chapter_id": "ch_matrices",
+  "title": "Matrix multiplication",
+  "content_type": "derivation",
+  "status": "partial",
+  "order": 1,
+  "blocks": [
+    {
+      "id": "blk_sec",
+      "type": "section",
+      "status": "ready",
+      "payload": {
+        "intro": "Multiplying matrices is a linear combination of columns.",
+        "key_takeaway": "Rows times columns."
+      }
+    },
+    {
+      "id": "blk_code",
+      "type": "code",
+      "status": "error",
+      "payload": {},
+      "error": "provider timeout"
+    }
+  ]
+}

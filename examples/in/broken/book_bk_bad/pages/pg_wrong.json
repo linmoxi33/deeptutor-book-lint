@@ -1,0 +1,23 @@
+{
+  "id": "pg_other",
+  "book_id": "bk_bad",
+  "chapter_id": "ch_ghost",
+  "status": "ready",
+  "order": 0,
+  "blocks": [
+    {
+      "id": "blk_q",
+      "type": "quiz",
+      "status": "ready",
+      "payload": {
+        "questions": []
+      }
+    },
+    {
+      "id": "blk_q",
+      "type": "nonsense",
+      "status": "ready",
+      "payload": {}
+    }
+  ]
+}

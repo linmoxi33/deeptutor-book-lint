@@ -1,0 +1,23 @@
+{
+  "tool": "deeptutor-book-lint",
+  "version": "0.1.0",
+  "root": "examples/in/workspace",
+  "ok": true,
+  "strict": false,
+  "summary": {
+    "books": 1,
+    "errors": 0,
+    "warnings": 0
+  },
+  "books": [
+    {
+      "book_dir": "examples/in/workspace/book_bk_demo",
+      "book_id": "bk_demo",
+      "title": "Linear Algebra in Ten Pages",
+      "status": "ready",
+      "page_files": 2,
+      "ok": true,
+      "findings": []
+    }
+  ]
+}

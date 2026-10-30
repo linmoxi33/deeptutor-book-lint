@@ -1,0 +1,24 @@
+{
+  "book_id": "bk_demo",
+  "version": 1,
+  "chapters": [
+    {
+      "id": "ch_vectors",
+      "title": "Vectors",
+      "content_type": "theory",
+      "page_ids": [
+        "pg_what"
+      ],
+      "order": 0
+    },
+    {
+      "id": "ch_matrices",
+      "title": "Matrices",
+      "content_type": "derivation",
+      "page_ids": [
+        "pg_matrix"
+      ],
+      "order": 1
+    }
+  ]
+}

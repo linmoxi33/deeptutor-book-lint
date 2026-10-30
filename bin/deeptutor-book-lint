@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""Offline structural linter for DeepTutor on-disk Book bundles.
+
+DeepTutor persists each generated book as a directory::
+
+    book_<id>/
+      manifest.json      # Book
+      spine.json         # Spine / chapters
+      pages/<page_id>.json
+      progress.json      # optional
+      inputs.json        # optional
+
+Upstream validates these with Pydantic inside the API server, but a validation
+failure is logged at WARNING and turned into ``None``; the book then simply
+disappears from the library and the export route answers 404.  There is no CLI
+command that reads the directory offline and says which field is wrong.
+
+This linter does exactly that.  It never imports DeepTutor and never touches
+the network: it only reads JSON files and applies the field/enumeration
+contract documented by ``deeptutor/book/models.py``.
+
+Exit codes:
+  0  no errors (warnings allowed unless --strict)
+  1  findings (errors, or warnings with --strict)
+  2  usage / input error (path missing, no book bundles found, bad flag)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+BOOK_STATUS = {"draft", "spine_ready", "compiling", "paused", "ready", "error", "archived"}
+PAGE_STATUS = {"pending", "planning", "generating", "ready", "partial", "error"}
+BLOCK_STATUS = {"pending", "generating", "ready", "error", "hidden"}
+BLOCK_TYPE = {
+    "text", "callout", "quiz", "user_note", "figure", "interactive", "animation",
+    "code", "timeline", "flash_cards", "deep_dive", "section", "concept_graph",
+    "diagnostic", "pretest", "retrieval_practice", "error_diagnosis",
+    "module_test", "progress_dashboard",
+}
+CONTENT_TYPE = {"theory", "derivation", "history", "practice", "project", "reference"}
+
+
+class Finding:
+    __slots__ = ("code", "severity", "file", "path", "message")
+
+    def __init__(self, code, severity, file, path, message):
+        self.code = code
+        self.severity = severity
+        self.file = file
+        self.path = path
+        self.message = message
+
+    def as_dict(self):
+        return {
+            "code": self.code,
+            "severity": self.severity,
+            "file": self.file,
+            "path": self.path,
+            "message": self.message,
+        }
+
+
+def _load_json(path: Path, rel: str, findings: list) -> object:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        findings.append(Finding("JSON001", "error", rel, "$", f"invalid JSON: {exc}"))
+        return None
+
+
+def _req_str(obj: dict, key: str, rel: str, code: str, findings: list, path="$"):
+    value = obj.get(key)
+    if not isinstance(value, str) or not value.strip():
+        findings.append(Finding(code, "error", rel, f"{path}.{key}", f"missing or empty string field '{key}'"))
+        return False
+    return True
+
+
+def _check_block(block, rel, idx, findings):
+    path = f"$.blocks[{idx}]"
+    if not isinstance(block, dict):
+        findings.append(Finding("BLK001", "error", rel, path, "block is not an object"))
+        return
+    bid = block.get("id")
+    if not isinstance(bid, str) or not bid.strip():
+        findings.append(Finding("BLK002", "warning", rel, f"{path}.id", "block has no id; DeepTutor generates one at runtime"))
+    btype = block.get("type")
+    if btype not in BLOCK_TYPE:
+        findings.append(Finding("BLK003", "error", rel, f"{path}.type", f"unknown block type {btype!r}"))
+        return
+    bstatus = block.get("status", "pending")
+    if bstatus not in BLOCK_STATUS:
+        findings.append(Finding("BLK004", "error", rel, f"{path}.status", f"unknown block status {bstatus!r}"))
+    payload = block.get("payload")
+    if not isinstance(payload, dict):
+        findings.append(Finding("BLK005", "error", rel, f"{path}.payload", "payload is not an object"))
+        return
+    if bstatus != "ready":
+        return
+    if not payload:
+        findings.append(Finding("BLK006", "error", rel, f"{path}.payload", f"block is 'ready' but payload is empty (type={btype})"))
+        return
+    if btype == "quiz":
+        questions = payload.get("questions")
+        if not isinstance(questions, list) or not questions:
+            findings.append(Finding("BLK007", "error", rel, f"{path}.payload.questions", "quiz block needs a non-empty questions list"))
+        else:
+            for qi, q in enumerate(questions):
+                if not isinstance(q, dict) or not str(q.get("question", "")).strip():
+                    findings.append(Finding("BLK008", "error", rel, f"{path}.payload.questions[{qi}].question", "quiz question has no 'question' text"))
+    elif btype == "flash_cards":
+        cards = payload.get("cards")
+        if not isinstance(cards, list) or not cards:
+            findings.append(Finding("BLK009", "error", rel, f"{path}.payload.cards", "flash_cards block needs a non-empty cards list"))
+        else:
+            for ci, c in enumerate(cards):
+                if not isinstance(c, dict) or not str(c.get("front", "")).strip() or not str(c.get("back", "")).strip():
+                    findings.append(Finding("BLK010", "error", rel, f"{path}.payload.cards[{ci}]", "card needs non-empty 'front' and 'back'"))
+    elif btype == "timeline":
+        events = payload.get("events")
+        if not isinstance(events, list) or not events:
+            findings.append(Finding("BLK011", "error", rel, f"{path}.payload.events", "timeline block needs a non-empty events list"))
+        else:
+            for ei, e in enumerate(events):
+                if not isinstance(e, dict) or not str(e.get("title", "")).strip():
+                    findings.append(Finding("BLK012", "error", rel, f"{path}.payload.events[{ei}].title", "timeline event has no 'title'"))
+    elif btype == "section":
+        has_body = any(str(payload.get(k, "")).strip() for k in ("intro", "body"))
+        subs = payload.get("subsections")
+        if not has_body and not (isinstance(subs, list) and subs):
+            findings.append(Finding("BLK013", "error", rel, f"{path}.payload", "section block has neither intro/body nor subsections"))
+    elif btype in {"text", "callout", "deep_dive", "user_note"}:
+        if not any(str(payload.get(k, "")).strip() for k in ("body", "text", "content")):
+            findings.append(Finding("BLK014", "error", rel, f"{path}.payload", f"{btype} block has no body/text/content"))
+    elif btype == "code":
+        if not str(payload.get("code", "")).strip():
+            findings.append(Finding("BLK015", "error", rel, f"{path}.payload.code", "code block has no 'code'"))
+    elif btype in {"figure", "interactive", "animation"}:
+        if not any(str(payload.get(k, "")).strip() for k in ("description", "url", "src", "html", "svg")):
+            findings.append(Finding("BLK016", "warning", rel, f"{path}.payload", f"{btype} block has no description/url/src/svg"))
+
+
+def validate_book(book_dir: Path) -> dict:
+    rel_manifest = "manifest.json"
+    findings: list = []
+    result = {
+        "book_dir": str(book_dir),
+        "book_id": None,
+        "title": None,
+        "status": None,
+        "page_files": 0,
+        "findings": findings,
+    }
+
+    manifest = _load_json(book_dir / "manifest.json", rel_manifest, findings)
+    if manifest is None:
+        if not (book_dir / "manifest.json").exists():
+            findings.append(Finding("BOOK001", "error", rel_manifest, "$", "manifest.json is missing"))
+        return result
+    if not isinstance(manifest, dict):
+        findings.append(Finding("BOOK002", "error", rel_manifest, "$", "manifest.json must be a JSON object"))
+        return result
+
+    _req_str(manifest, "id", rel_manifest, "BOOK003", findings)
+    bid = manifest.get("id")
+    result["book_id"] = bid if isinstance(bid, str) else None
+    result["title"] = manifest.get("title")
+    status = manifest.get("status")
+    result["status"] = status
+    if status not in BOOK_STATUS:
+        findings.append(Finding("BOOK004", "error", rel_manifest, "$.status", f"unknown book status {status!r}"))
+    if not isinstance(manifest.get("title"), str):
+        findings.append(Finding("BOOK005", "warning", rel_manifest, "$.title", "title is missing; export would fall back to 'Untitled book'"))
+    if isinstance(bid, str) and book_dir.name.startswith("book_") and book_dir.name[len("book_"):] != bid:
+        findings.append(Finding("BOOK006", "warning", rel_manifest, "$.id", f"directory is {book_dir.name!r} but manifest id is {bid!r}"))
+
+    spine = _load_json(book_dir / "spine.json", "spine.json", findings)
+    chapters = []
+    if spine is None:
+        if not (book_dir / "spine.json").exists():
+            sev = "error" if status in {"spine_ready", "ready", "compiling"} else "warning"
+            findings.append(Finding("SPN001", sev, "spine.json", "$", f"spine.json is missing (book status={status!r})"))
+    elif not isinstance(spine, dict):
+        findings.append(Finding("SPN002", "error", "spine.json", "$", "spine.json must be a JSON object"))
+    else:
+        if isinstance(bid, str) and spine.get("book_id") != bid:
+            findings.append(Finding("SPN003", "error", "spine.json", "$.book_id", f"spine.book_id {spine.get('book_id')!r} != manifest.id {bid!r}"))
+        chapters = spine.get("chapters")
+        if not isinstance(chapters, list):
+            findings.append(Finding("SPN004", "error", "spine.json", "$.chapters", "chapters must be a list"))
+            chapters = []
+        seen_ch = {}
+        for ci, ch in enumerate(chapters):
+            cpath = f"$.chapters[{ci}]"
+            if not isinstance(ch, dict):
+                findings.append(Finding("CHP001", "error", "spine.json", cpath, "chapter is not an object"))
+                continue
+            cid = ch.get("id")
+            if not isinstance(cid, str) or not cid.strip():
+                findings.append(Finding("CHP002", "error", "spine.json", f"{cpath}.id", "chapter has no id"))
+            elif cid in seen_ch:
+                findings.append(Finding("CHP003", "error", "spine.json", f"{cpath}.id", f"duplicate chapter id {cid!r} (first at index {seen_ch[cid]})"))
+            else:
+                seen_ch[cid] = ci
+            if not isinstance(ch.get("title"), str):
+                findings.append(Finding("CHP004", "warning", "spine.json", f"{cpath}.title", "chapter title is missing"))
+            ctype = ch.get("content_type", "theory")
+            if ctype not in CONTENT_TYPE:
+                findings.append(Finding("CHP005", "warning", "spine.json", f"{cpath}.content_type", f"unknown content_type {ctype!r}"))
+            pids = ch.get("page_ids", [])
+            if not isinstance(pids, list):
+                findings.append(Finding("CHP006", "error", "spine.json", f"{cpath}.page_ids", "page_ids must be a list"))
+                pids = []
+            for pid in pids:
+                if not isinstance(pid, str) or not pid:
+                    findings.append(Finding("CHP007", "error", "spine.json", f"{cpath}.page_ids", "page_ids contains a non-string/empty entry"))
+                elif not (book_dir / "pages" / f"{pid}.json").exists():
+                    findings.append(Finding("CHP008", "error", "spine.json", f"{cpath}.page_ids", f"references page {pid!r} but pages/{pid}.json does not exist"))
+
+    pages_dir = book_dir / "pages"
+    page_ids = set()
+    page_files = sorted(pages_dir.glob("*.json")) if pages_dir.is_dir() else []
+    result["page_files"] = len(page_files)
+    referenced = set()
+    if isinstance(chapters, list):
+        for ch in chapters:
+            if isinstance(ch, dict) and isinstance(ch.get("page_ids"), list):
+                referenced.update(p for p in ch["page_ids"] if isinstance(p, str))
+
+    order_seen = {}
+    for pf in page_files:
+        rel = f"pages/{pf.name}"
+        page = _load_json(pf, rel, findings)
+        if not isinstance(page, dict):
+            findings.append(Finding("PAGE001", "error", rel, "$", "page file must be a JSON object"))
+            continue
+        pid = page.get("id")
+        stem = pf.stem
+        page_ids.add(stem)
+        if not isinstance(pid, str) or not pid:
+            findings.append(Finding("PAGE002", "error", rel, "$.id", "page has no id"))
+        elif pid != stem:
+            findings.append(Finding("PAGE003", "error", rel, "$.id", f"page.id {pid!r} != filename stem {stem!r}"))
+        if isinstance(bid, str) and page.get("book_id") not in (bid, ""):
+            findings.append(Finding("PAGE004", "error", rel, "$.book_id", f"page.book_id {page.get('book_id')!r} != manifest.id {bid!r}"))
+        cid = page.get("chapter_id")
+        ch_ids = {c.get("id") for c in chapters if isinstance(c, dict)}
+        if isinstance(cid, str) and cid and cid not in ch_ids:
+            findings.append(Finding("PAGE005", "error", rel, "$.chapter_id", f"page.chapter_id {cid!r} is not in spine.chapters"))
+        if stem not in referenced:
+            findings.append(Finding("PAGE006", "warning", rel, "$.id", f"page {stem!r} is not referenced by any chapter.page_ids"))
+        pstatus = page.get("status", "pending")
+        if pstatus not in PAGE_STATUS:
+            findings.append(Finding("PAGE007", "error", rel, "$.status", f"unknown page status {pstatus!r}"))
+        order = page.get("order")
+        if isinstance(order, int):
+            if order in order_seen:
+                findings.append(Finding("PAGE008", "warning", rel, "$.order", f"duplicate page order {order} (also used by {order_seen[order]})"))
+            else:
+                order_seen[order] = stem
+        blocks = page.get("blocks")
+        if not isinstance(blocks, list):
+            findings.append(Finding("PAGE009", "error", rel, "$.blocks", "blocks must be a list"))
+            continue
+        seen_blk = set()
+        for bi, block in enumerate(blocks):
+            _check_block(block, rel, bi, findings)
+            if isinstance(block, dict) and isinstance(block.get("id"), str):
+                if block["id"] in seen_blk:
+                    findings.append(Finding("BLK017", "error", rel, f"$.blocks[{bi}].id", f"duplicate block id {block['id']!r} in page"))
+                seen_blk.add(block["id"])
+
+    if isinstance(manifest.get("page_count"), int) and manifest["page_count"] != len(page_files):
+        findings.append(Finding("CNT001", "warning", rel_manifest, "$.page_count", f"page_count={manifest['page_count']} but {len(page_files)} page file(s) on disk"))
+    if isinstance(manifest.get("chapter_count"), int) and isinstance(chapters, list) and manifest["chapter_count"] != len(chapters):
+        findings.append(Finding("CNT002", "warning", rel_manifest, "$.chapter_count", f"chapter_count={manifest['chapter_count']} but spine has {len(chapters)} chapter(s)"))
+
+    return result
+
+
+def discover(root: Path) -> list:
+    if (root / "manifest.json").is_file():
+        return [root]
+    # A directly-passed bundle is validated even when its manifest is missing,
+    # so the caller gets BOOK001 instead of a bare "nothing found" usage error.
+    if root.is_dir() and root.name.startswith("book_"):
+        return [root]
+    if root.is_dir():
+        return sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("book_") and (p / "manifest.json").is_file())
+    return []
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="deeptutor-book-lint",
+        description="Offline structural linter for DeepTutor book_* directories.",
+    )
+    parser.add_argument("path", help="a book_* directory, or the workspace book/ directory containing book_* dirs")
+    parser.add_argument("--json", action="store_true", help="machine-readable report on stdout")
+    parser.add_argument("--strict", action="store_true", help="treat warnings as findings (exit 1)")
+    args = parser.parse_args(argv)
+
+    root = Path(args.path)
+    if not root.exists():
+        print(f"error: path does not exist: {root}", file=sys.stderr)
+        return 2
+    books = discover(root)
+    if not books:
+        print(f"error: no book_*/manifest.json found under: {root}", file=sys.stderr)
+        return 2
+
+    reports = [validate_book(b) for b in books]
+    errors = sum(1 for r in reports for f in r["findings"] if f.severity == "error")
+    warnings = sum(1 for r in reports for f in r["findings"] if f.severity == "warning")
+    failed = errors > 0 or (args.strict and warnings > 0)
+
+    if args.json:
+        payload = {
+            "tool": "deeptutor-book-lint",
+            "version": "0.1.0",
+            "root": str(root),
+            "ok": not failed,
+            "strict": bool(args.strict),
+            "summary": {
+                "books": len(reports),
+                "errors": errors,
+                "warnings": warnings,
+            },
+            "books": [
+                {
+                    "book_dir": r["book_dir"],
+                    "book_id": r["book_id"],
+                    "title": r["title"],
+                    "status": r["status"],
+                    "page_files": r["page_files"],
+                    "ok": not any(f.severity == "error" for f in r["findings"]),
+                    "findings": [f.as_dict() for f in r["findings"]],
+                }
+                for r in reports
+            ],
+        }
+        json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+        sys.stdout.write("\n")
+    else:
+        for r in reports:
+            label = r["book_id"] or Path(r["book_dir"]).name
+            print(f"{label}  ({r['status'] or 'unknown'}, {r['page_files']} page file(s))")
+            if not r["findings"]:
+                print("  ok")
+            for f in r["findings"]:
+                print(f"  {f.severity.upper():7} {f.code}  {f.file}:{f.path}  {f.message}")
+        print(f"\n{len(reports)} book(s), {errors} error(s), {warnings} warning(s)")
+
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

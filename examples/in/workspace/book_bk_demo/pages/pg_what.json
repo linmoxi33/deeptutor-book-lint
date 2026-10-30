@@ -1,0 +1,36 @@
+{
+  "id": "pg_what",
+  "book_id": "bk_demo",
+  "chapter_id": "ch_vectors",
+  "title": "What is a vector?",
+  "content_type": "theory",
+  "status": "ready",
+  "order": 0,
+  "blocks": [
+    {
+      "id": "blk_text",
+      "type": "text",
+      "status": "ready",
+      "payload": {
+        "body": "A vector is an ordered list of numbers."
+      }
+    },
+    {
+      "id": "blk_quiz",
+      "type": "quiz",
+      "status": "ready",
+      "payload": {
+        "questions": [
+          {
+            "question": "Which of these is a vector?",
+            "options": {
+              "A": "3",
+              "B": "(1, 2)"
+            },
+            "correct_answer": "B"
+          }
+        ]
+      }
+    }
+  ]
+}

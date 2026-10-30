@@ -1,0 +1,13 @@
+{
+  "id": "bk_demo",
+  "revision": 3,
+  "title": "Linear Algebra in Ten Pages",
+  "description": "A short demo book",
+  "status": "ready",
+  "language": "en",
+  "depth": "standard",
+  "page_count": 2,
+  "chapter_count": 2,
+  "created_at": 1760000000.0,
+  "updated_at": 1760000500.0
+}

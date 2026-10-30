@@ -1,0 +1,87 @@
+{
+  "tool": "deeptutor-book-lint",
+  "version": "0.1.0",
+  "root": "examples/in/broken",
+  "ok": false,
+  "strict": false,
+  "summary": {
+    "books": 1,
+    "errors": 7,
+    "warnings": 2
+  },
+  "books": [
+    {
+      "book_dir": "examples/in/broken/book_bk_bad",
+      "book_id": "bk_bad",
+      "title": "Broken Book",
+      "status": "ready",
+      "page_files": 1,
+      "ok": false,
+      "findings": [
+        {
+          "code": "SPN003",
+          "severity": "error",
+          "file": "spine.json",
+          "path": "$.book_id",
+          "message": "spine.book_id 'bk_other' != manifest.id 'bk_bad'"
+        },
+        {
+          "code": "CHP008",
+          "severity": "error",
+          "file": "spine.json",
+          "path": "$.chapters[0].page_ids",
+          "message": "references page 'pg_missing' but pages/pg_missing.json does not exist"
+        },
+        {
+          "code": "PAGE003",
+          "severity": "error",
+          "file": "pages/pg_wrong.json",
+          "path": "$.id",
+          "message": "page.id 'pg_other' != filename stem 'pg_wrong'"
+        },
+        {
+          "code": "PAGE005",
+          "severity": "error",
+          "file": "pages/pg_wrong.json",
+          "path": "$.chapter_id",
+          "message": "page.chapter_id 'ch_ghost' is not in spine.chapters"
+        },
+        {
+          "code": "PAGE006",
+          "severity": "warning",
+          "file": "pages/pg_wrong.json",
+          "path": "$.id",
+          "message": "page 'pg_wrong' is not referenced by any chapter.page_ids"
+        },
+        {
+          "code": "BLK007",
+          "severity": "error",
+          "file": "pages/pg_wrong.json",
+          "path": "$.blocks[0].payload.questions",
+          "message": "quiz block needs a non-empty questions list"
+        },
+        {
+          "code": "BLK003",
+          "severity": "error",
+          "file": "pages/pg_wrong.json",
+          "path": "$.blocks[1].type",
+          "message": "unknown block type 'nonsense'"
+        },
+        {
+          "code": "BLK017",
+          "severity": "error",
+          "file": "pages/pg_wrong.json",
+          "path": "$.blocks[1].id",
+          "message": "duplicate block id 'blk_q' in page"
+        },
+        {
+          "code": "CNT001",
+          "severity": "warning",
+          "file": "manifest.json",
+          "path": "$.page_count",
+          "message": "page_count=5 but 1 page file(s) on disk"
+        }
+      ]
+    }
+  ]
+}

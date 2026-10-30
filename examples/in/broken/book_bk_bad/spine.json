@@ -1,0 +1,12 @@
+{
+  "book_id": "bk_other",
+  "chapters": [
+    {
+      "id": "ch_one",
+      "title": "One",
+      "page_ids": [
+        "pg_missing"
+      ]
+    }
+  ]
+}
